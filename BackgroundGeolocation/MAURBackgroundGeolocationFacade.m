@@ -60,6 +60,9 @@ FMDBLogger *sqliteLogger;
     MAURLocation *stationaryLocation;
     MAURAbstractLocationProvider<MAURLocationProvider> *locationProvider;
     MAURPostLocationTask *postLocationTask;
+
+    NSDate *prevDate;
+    CLLocation *prevLocation;
 }
 
 
@@ -484,55 +487,98 @@ FMDBLogger *sqliteLogger;
 
 - (void) onStationaryChanged:(MAURLocation *)location
 {
-    DDLogDebug(@"%@ #onStationaryChanged", TAG);
-    stationaryLocation = location;
-    
-    [postLocationTask add:location];
-    
-    MAURConfig *config = [self getConfig];
-    if ([config isDebugging]) {
-        double distanceFilter = [MAURLocationManager sharedInstance].distanceFilter;
-        [self notify:[NSString stringWithFormat:@"Stationary update: %s\nSPD: %0.0f | DF: %f | ACY: %0.0f | RAD: %0.0f",
-                      ((operationMode == MAURForegroundMode) ? "FG" : "BG"),
-                      [location.speed doubleValue],
-                      distanceFilter,
-                      [location.accuracy doubleValue],
-                      [location.radius doubleValue]
-                      ]];
+    if ( [self canSendLocation:location] == true ) {
+        DDLogDebug(@"%@ #onStationaryChanged", TAG);
+        stationaryLocation = location;
         
-        AudioServicesPlaySystemSound (locationSyncSound);
-    }
-    
-    // Any javascript stationaryRegion event-listeners?
-    if (self.delegate && [self.delegate respondsToSelector:@selector(onStationaryChanged:)]) {
-        [self.delegate onStationaryChanged:location];
+        [postLocationTask add:location];
+
+        MAURConfig *config = [self getConfig];
+        if ([config isDebugging]) {
+            double distanceFilter = [MAURLocationManager sharedInstance].distanceFilter;
+            [self notify:[NSString stringWithFormat:@"Stationary update: %s\nSPD: %0.0f | DF: %f | ACY: %0.0f | RAD: %0.0f",
+                          ((operationMode == MAURForegroundMode) ? "FG" : "BG"),
+                          [location.speed doubleValue],
+                          distanceFilter,
+                          [location.accuracy doubleValue],
+                          [location.radius doubleValue]
+                          ]];
+
+            AudioServicesPlaySystemSound (locationSyncSound);
+        }
+
+        // Any javascript stationaryRegion event-listeners?
+        if (self.delegate && [self.delegate respondsToSelector:@selector(onStationaryChanged:)]) {
+            [self.delegate onStationaryChanged:location];
+        }
     }
 }
 
 - (void) onLocationChanged:(MAURLocation *)location
 {
-    DDLogDebug(@"%@ #onLocationChanged %@", TAG, location);
-    stationaryLocation = nil;
-    
-    [postLocationTask add:location];
-    
-    MAURConfig *config = [self getConfig];
-    if ([config isDebugging]) {
-        double distanceFilter = [MAURLocationManager sharedInstance].distanceFilter;
-        [self notify:[NSString stringWithFormat:@"Location update: %s\nSPD: %0.0f | DF: %f | ACY: %0.0f",
-                      ((operationMode == MAURForegroundMode) ? "FG" : "BG"),
-                      [location.speed doubleValue],
-                      distanceFilter,
-                      [location.accuracy doubleValue]
-                      ]];
-        
-        AudioServicesPlaySystemSound (locationSyncSound);
+    if ( [self canSendLocation:location] == true ) {
+        DDLogDebug(@"%@ facad #onLocationChanged %@", TAG, location);
+        stationaryLocation = nil;
+
+        [postLocationTask add:location];
+
+        MAURConfig *config = [self getConfig];
+        if ([config isDebugging]) {
+            double distanceFilter = [MAURLocationManager sharedInstance].distanceFilter;
+            [self notify:[NSString stringWithFormat:@"Location update: %s\nSPD: %0.0f | DF: %f | ACY: %0.0f",
+                          ((operationMode == MAURForegroundMode) ? "FG" : "BG"),
+                          [location.speed doubleValue],
+                          distanceFilter,
+                          [location.accuracy doubleValue]
+                          ]];
+
+            AudioServicesPlaySystemSound (locationSyncSound);
+        }
+
+        // Delegate to main module
+        if (self.delegate && [self.delegate respondsToSelector:@selector(onLocationChanged:)]) {
+            [self.delegate onLocationChanged:location];
+        }
+    }
+}
+
+- (bool) canSendLocation: (MAURLocation *) currentLoc {
+    bool validAccuracy = false;
+    bool distanceCovered = false;
+    bool timeSpent = false;
+
+    if ( !_config.hasDesiredAccuracy || [currentLoc.accuracy doubleValue] <= [_config.desiredAccuracy doubleValue] ) {
+        validAccuracy = true;
     }
     
-    // Delegate to main module
-    if (self.delegate && [self.delegate respondsToSelector:@selector(onLocationChanged:)]) {
-        [self.delegate onLocationChanged:location];
+    NSDate *currentDate = [NSDate date];
+    if ( prevDate == nil ) {
+        timeSpent = true;
+    } else {
+        double millisecondsSpent = [currentDate timeIntervalSinceDate:prevDate] * 1000;
+        if ( !_config.hasActivitiesInterval || [_config.activitiesInterval doubleValue] <= millisecondsSpent ) {
+            DDLogDebug(@"%@ #canSendLocation %f", TAG, millisecondsSpent);
+            timeSpent = true;
+        }
     }
+    
+    CLLocation *currentLocation = [[CLLocation alloc] initWithLatitude:[currentLoc.latitude doubleValue] longitude:[currentLoc.longitude doubleValue]];
+    if ( prevLocation == nil ) {
+        distanceCovered = true;
+    } else {
+        double distance = [prevLocation distanceFromLocation:currentLocation];
+        if ( !_config.hasDistanceFilter || [_config.distanceFilter doubleValue] <= distance ) {
+            distanceCovered = true;
+        }
+    }
+    
+    if ( validAccuracy && timeSpent && distanceCovered ) {
+        DDLogDebug(@"%@ #canSendLocation %@", TAG, currentLocation);
+        prevDate = currentDate;
+        prevLocation = currentLocation;
+        return true;
+    }
+    return false;
 }
 
 - (void) onAuthorizationChanged:(MAURLocationAuthorizationStatus)authStatus
