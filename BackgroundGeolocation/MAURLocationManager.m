@@ -30,6 +30,7 @@ static NSString *const Domain = @"com.marianhello";
     self = [super init];
     if (self != nil) {
         locationManager = [[CLLocationManager alloc] init];
+        [locationManager requestAlwaysAuthorization];
 
         if (SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(@"9.0")) {
             locationManager.allowsBackgroundLocationUpdates = YES;
